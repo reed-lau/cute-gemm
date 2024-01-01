@@ -8,6 +8,33 @@
 #include "detail/cublaslt-gemm.h"
 #include "detail/data.h"
 
+template <int kSwN, int kSwM = kSwN>
+__host__ __device__ __inline__ void thread_block_swizzle(int *iyo, int *ixo,
+                                                         int iy, int ix,
+                                                         int num_block_m,
+                                                         int num_block_n) {
+  using namespace cute;
+
+  auto sw_tile = make_layout(make_shape(Int<kSwM>{}, Int<kSwN>{}),
+                             make_stride(Int<kSwN>{}, Int<1>{}));
+
+  int num_block_m_div = num_block_m / kSwM;
+  int num_block_n_div = num_block_n / kSwN;
+  auto block_mn_div = make_layout(make_shape(num_block_m_div, num_block_n_div),
+                                  make_stride(num_block_n_div, Int<1>{}));
+
+  auto sw_block = blocked_product(sw_tile, block_mn_div);
+
+  auto sp = make_shape(num_block_m, num_block_n);
+  auto st = make_stride(num_block_n, Int<1>{});
+
+  int ioffset = sw_block(iy, ix);
+  auto crd = idx2crd(ioffset, sp, st);
+
+  *iyo = get<0>(crd);
+  *ixo = get<1>(crd);
+}
+
 template <typename Config>
 __global__ void /* __launch_bounds__(128, 1) */
 gemm_multi_stage(void *Dptr, const void *Aptr, const void *Bptr, int m, int n,
@@ -42,6 +69,8 @@ gemm_multi_stage(void *Dptr, const void *Aptr, const void *Bptr, int m, int n,
   int idx = threadIdx.x;
   int ix = blockIdx.x;
   int iy = blockIdx.y;
+
+  // thread_block_swizzle<16>(&iy, &ix, iy, ix, 16, 16);
 
   // use Tensor notation to represent device pointer + dimension
   Tensor A = make_tensor(make_gmem_ptr((T *)Aptr), make_shape(m, k),
@@ -136,6 +165,8 @@ gemm_multi_stage(void *Dptr, const void *Aptr, const void *Bptr, int m, int n,
     for (int ik = 0; ik < nk; ++ik) {
       int ik_next = (ik + 1) % nk;
 
+      cute::gemm(tiled_mma, tCrD, tCrA(_, _, ik), tCrB(_, _, ik), tCrD);
+
       if (ik == nk - 1) {
         cp_async_wait<kStage - 2>();
         __syncthreads();
@@ -150,20 +181,18 @@ gemm_multi_stage(void *Dptr, const void *Aptr, const void *Bptr, int m, int n,
                  tCrB_view(_, _, ik_next));
 
       if (ik == 0) {
-        if (itile_to_read < ntile) {
-          cute::copy(g2s_tiled_copy_a, tAgA_copy(_, _, _, itile_to_read),
-                     tAsA_copy(_, _, _, ismem_write));
-          cute::copy(g2s_tiled_copy_b, tBgB_copy(_, _, _, itile_to_read),
-                     tBsB_copy(_, _, _, ismem_write));
+        cute::copy(g2s_tiled_copy_a, tAgA_copy(_, _, _, itile_to_read),
+                   tAsA_copy(_, _, _, ismem_write));
+        cute::copy(g2s_tiled_copy_b, tBgB_copy(_, _, _, itile_to_read),
+                   tBsB_copy(_, _, _, ismem_write));
 
-          ++itile_to_read;
-          ismem_write = (ismem_write + 1) % kStage;
-        }
+        ++itile_to_read;
+        itile_to_read = itile_to_read <= ntile - 1 ? itile_to_read : ntile - 1;
+        ismem_write = (ismem_write + 1) % kStage;
 
         cp_async_fence();
       }
 
-      cute::gemm(tiled_mma, tCrD, tCrA(_, _, ik), tCrB(_, _, ik), tCrD);
     }  // for ik
   }    // itile
 
@@ -328,9 +357,9 @@ int main(int argc, char *argv[]) {
   printf("cuBLAS version: %d\n", cublas_version);
 
   // default;
-  int M = 81920;
-  int N = 256;
-  int K = 256;
+  int M = 2048;
+  int N = 2048;
+  int K = 2048;
 
   int enable_cpu = 0;
   int enable_cublaslt = 1;
@@ -385,7 +414,7 @@ int main(int argc, char *argv[]) {
     cublaslt_gemm.init(Dptr_cublaslt, Bptr, Aptr, N, M, K);
   }
 
-  config::GemmConfig<T, 128, 128, 32, 3> gemm_config;
+  config::GemmConfig<T, 128, 128, 32, 5> gemm_config;
 
   print(typename decltype(gemm_config)::MMA{});
 
