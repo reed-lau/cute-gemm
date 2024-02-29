@@ -250,17 +250,16 @@ struct GemmConfig {
   static constexpr int kMmaEURepeatN = 2;
   static constexpr int kMmaEURepeatK = 1;
 
-  static constexpr int kMmaVRepeatM = 1;
-  static constexpr int kMmaVRepeatN = 2;
-  static constexpr int kMmaVRepeatK = 1;
+  using mma_atom_shape = mma_traits::Shape_MNK;
+  static constexpr int kMmaPM = 1 * kMmaEURepeatM * get<0>(mma_atom_shape{});
+  static constexpr int kMmaPN = 2 * kMmaEURepeatN * get<1>(mma_atom_shape{});
+  static constexpr int kMmaPK = 1 * kMmaEURepeatK * get<2>(mma_atom_shape{});
 
   using MMA_EU_RepeatT = decltype(make_layout(make_shape(
       Int<kMmaEURepeatM>{}, Int<kMmaEURepeatN>{}, Int<kMmaEURepeatK>{})));
-  using MMA_V_RepeatT = decltype(make_layout(make_shape(
-      Int<kMmaVRepeatM>{}, Int<kMmaVRepeatN>{}, Int<kMmaVRepeatK>{})));
+  using MMA_P_T = Tile<Int<kMmaPM>, Int<kMmaPN>, Int<kMmaPK>>;
 
-  using MMA =
-      decltype(make_tiled_mma(mma_atom{}, MMA_EU_RepeatT{}, MMA_V_RepeatT{}));
+  using MMA = decltype(make_tiled_mma(mma_atom{}, MMA_EU_RepeatT{}, MMA_P_T{}));
 
   using g2s_copy_op = SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>;
   using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
@@ -282,13 +281,12 @@ struct GemmConfig {
   using S2RCopyAtomB = s2r_copy_atom;
 
   // epilogue: register to global via shared memory
-  using MNK = typename MMA::TiledShape_MNK;
   using SmemLayoutAtomC = decltype(composition(
-      Swizzle<2, 3, 3>{}, make_layout(make_shape(get<0>(MNK{}), get<1>(MNK{})),
-                                      make_stride(get<1>(MNK{}), Int<1>{}))));
+      Swizzle<2, 3, 3>{}, make_layout(make_shape(Int<kMmaPM>{}, Int<kMmaPN>{}),
+                                      make_stride(Int<kMmaPN>{}, Int<1>{}))));
   using SmemLayoutC = decltype(tile_to_shape(
       SmemLayoutAtomC{},
-      make_shape(get<0>(MNK{}), get<1>(MNK{}), Int<kSmemLayoutCBatch>{})));
+      make_shape(Int<kMmaPM>{}, Int<kMmaPN>{}, Int<kSmemLayoutCBatch>{})));
 
   static_assert(size<0>(SmemLayoutA{}) * size<1>(SmemLayoutA{}) >=
                     size(SmemLayoutC{}),
