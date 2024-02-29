@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -40,7 +40,6 @@
 #include "cutlass/gemm/dispatch_policy.hpp"
 #include "cutlass/gemm/kernel/sm90_tile_scheduler.hpp"
 #include "cutlass/trace.h"
-
 #include "cute/tensor.hpp"
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -80,9 +79,8 @@ public:
   // Type Aliases
   //
   using ProblemShape = ProblemShape_;
-  static_assert(rank(ProblemShape{}) == 3 or rank(ProblemShape{}) == 4,
+  static_assert(cute::rank(ProblemShape{}) == 3 or cute::rank(ProblemShape{}) == 4,
     "ProblemShape{} should be <M,N,K> or <M,N,K,L>");
-
   // Mainloop derived types
   using CollectiveMainloop = CollectiveMainloop_;
   using TileShape = typename CollectiveMainloop::TileShape;
@@ -121,7 +119,8 @@ public:
       sizeof(typename CollectiveMainloop::SharedStorage),
       sizeof(typename CollectiveEpilogue::SharedStorage)));
 
-  static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
+  static constexpr uint32_t MaxThreadsPerBlock = CollectiveMainloop::ThreadCount;
+
   static constexpr uint32_t MinBlocksPerMultiprocessor = 1;
 
   // Device side arguments
@@ -169,13 +168,15 @@ public:
   bool
   can_implement(Arguments const& args) {
     bool implementable = (args.mode == GemmUniversalMode::kGemm) or
-        (args.mode == GemmUniversalMode::kBatched && rank(ProblemShape{}) == 4);
+        (args.mode == GemmUniversalMode::kBatched && cute::rank(ProblemShape{}) == 4);
     if (!implementable) {
       CUTLASS_TRACE_HOST("  CAN IMPLEMENT: Arguments or Problem Shape don't meet the requirements.\n");
       return implementable;
     }
     implementable &= CollectiveMainloop::can_implement(args.problem_shape, args.mainloop);
     implementable &= CollectiveEpilogue::can_implement(args.problem_shape, args.epilogue);
+    implementable &= TileScheduler::can_implement(args.scheduler);
+
     return implementable;
   }
 
@@ -210,19 +211,16 @@ public:
     using namespace cute;
     using X = Underscore;
 
-    // Any Tensor Op MMA Atom in the WGMMA ISA is arch conditional to sm90a.
-    #if ! defined(__CUDA_ARCH_FEAT_SM90_ALL)
-      if constexpr(size<0>(typename TiledMma::AtomShape_MNK{}) == 64) {
-        printf("ERROR : Arch conditional MMA instruction used without targeting sm90a compute capability. Aborting.\n");
-        return;
-      }
-    #endif
+// Any Tensor Op MMA Atom in the WGMMA ISA is arch conditional to sm90a.
+#if ! defined(__CUDA_ARCH_FEAT_SM90_ALL)
+    printf("ERROR : Arch conditional MMA instruction used without targeting sm90a compute capability. Aborting.\n");
+#else
 
     // Preconditions
-    static_assert(rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
-    static_assert(rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideA{}) == 3, "StrideA must be rank-3: [M, K, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideB{}) == 3, "StrideB must be rank-3: [N, K, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideC{}) == 3, "StrideC must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
+    static_assert(cute::rank(StrideD{}) == 3, "StrideD must be rank-3: [M, N, L]. If batch mode is not needed, set L stride to Int<0>.");
 
     int thread_idx = int(threadIdx.x);
     int warp_idx   = canonical_warp_idx_sync();
@@ -285,13 +283,13 @@ public:
       params.mainloop
     );
 
-    constexpr int BLK_M_RANK = rank<0>(blk_shape);
+    constexpr int BLK_M_RANK = cute::rank<0>(blk_shape);
     bool m_oob = int(blockIdx.x) >= size<2>(gA_mkl);
     auto m_max_coord = unwrap(cute::transform(make_seq<BLK_M_RANK>{}, [&](auto i) {
         return  m_oob ? 0 : get<i>(M) - get<0,i>(blk_shape) * get<i>(m_coord);
       }));
 
-    constexpr int BLK_N_RANK = rank<1>(blk_shape);
+    constexpr int BLK_N_RANK = cute::rank<1>(blk_shape);
     bool n_oob = int(blockIdx.y) >= size<2>(gB_nkl);
     auto n_max_coord = unwrap(cute::transform(make_seq<BLK_N_RANK>{}, [&](auto i) {
         return  n_oob ? 0 : get<i>(N) - get<1,i>(blk_shape) * get<i>(n_coord);
@@ -310,6 +308,7 @@ public:
       thread_idx,
       smem_buf
     );
+#endif
   }
 };
 

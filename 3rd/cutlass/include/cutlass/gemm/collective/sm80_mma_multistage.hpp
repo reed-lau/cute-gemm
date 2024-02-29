@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,7 +44,6 @@
 
 namespace cutlass::gemm::collective {
 using namespace cute;
-
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <
@@ -78,7 +77,8 @@ struct CollectiveMma<
     GmemTiledCopyB_,
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
-    TransformB_>
+    TransformB_
+  >
 {
   //
   // Type Aliases
@@ -101,11 +101,11 @@ struct CollectiveMma<
   using TransformB = TransformB_;
   using ArchTag = typename DispatchPolicy::ArchTag;
 
-  static_assert(rank(SmemLayoutAtomA{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
+  static_assert(cute::rank(SmemLayoutAtomA{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
   static_assert((size<0>(TileShape{}) % size<0>(SmemLayoutAtomA{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
   static_assert((size<2>(TileShape{}) % size<1>(SmemLayoutAtomA{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
 
-  static_assert(rank(SmemLayoutAtomB{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
+  static_assert(cute::rank(SmemLayoutAtomB{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
   static_assert((size<1>(TileShape{}) % size<0>(SmemLayoutAtomB{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
   static_assert((size<2>(TileShape{}) % size<1>(SmemLayoutAtomB{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
 
@@ -174,9 +174,9 @@ struct CollectiveMma<
     static_assert(is_gmem<TensorA>::value,    "A tensor must be gmem resident.");
     static_assert(is_gmem<TensorB>::value,    "B tensor must be gmem resident.");
     static_assert(is_rmem<FrgTensorC>::value, "C tensor must be rmem resident.");
-    static_assert(rank(SmemLayoutA{}) == 3,
+    static_assert(cute::rank(SmemLayoutA{}) == 3,
       "MainloopSm80CpAsync must have a pipeline mode in the smem layout.");
-    static_assert(rank(SmemLayoutB{}) == 3,
+    static_assert(cute::rank(SmemLayoutB{}) == 3,
       "MainloopSm80CpAsync must have a pipeline mode in the smem layout.");
 
     // Construct shared memory tiles
@@ -286,7 +286,6 @@ struct CollectiveMma<
       copy(smem_tiled_copy_B, tCsB_p(_,_,Int<0>{}), tCrB_copy_view(_,_,Int<0>{}));
     }
 
-
     CUTLASS_PRAGMA_NO_UNROLL
     for ( ; k_tile_count > -(DispatchPolicy::Stages-1); --k_tile_count)
     {
@@ -332,6 +331,7 @@ struct CollectiveMma<
       });
 
     }
+
   }
 };
 
@@ -352,7 +352,8 @@ template <
   class GmemTiledCopyB_,
   class SmemLayoutAtomB_,
   class SmemCopyAtomB_,
-  class TransformB_>
+  class TransformB_
+>
 struct CollectiveMma<
     MainloopSm80CpAsync<Stages>,
     TileShape_,
@@ -368,7 +369,8 @@ struct CollectiveMma<
     GmemTiledCopyB_,
     SmemLayoutAtomB_,
     SmemCopyAtomB_,
-    TransformB_>
+    TransformB_
+   >
 {
   //
   // Type Aliases
@@ -390,11 +392,11 @@ struct CollectiveMma<
   using TransformB = TransformB_;
   using ArchTag = typename DispatchPolicy::ArchTag;
 
-  static_assert(rank(SmemLayoutAtomA{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
+  static_assert(cute::rank(SmemLayoutAtomA{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
   static_assert((size<0>(TileShape{}) % size<0>(SmemLayoutAtomA{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
   static_assert((size<2>(TileShape{}) % size<1>(SmemLayoutAtomA{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
 
-  static_assert(rank(SmemLayoutAtomB{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
+  static_assert(cute::rank(SmemLayoutAtomB{}) == 2, "SmemLayoutAtom must be rank 2 (M/N, K)");
   static_assert((size<1>(TileShape{}) % size<0>(SmemLayoutAtomB{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
   static_assert((size<2>(TileShape{}) % size<1>(SmemLayoutAtomB{})) == 0, "SmemLayoutAtom must evenly divide tile shape.");
 
@@ -463,8 +465,8 @@ struct CollectiveMma<
     static_assert(is_gmem<TensorA>::value,    "A tensor must be gmem resident.");
     static_assert(is_gmem<TensorB>::value,    "B tensor must be gmem resident.");
     static_assert(is_rmem<FrgTensorC>::value, "C tensor must be rmem resident.");
-    static_assert(rank(SmemLayoutA{}) == 3, "Smem layout must be rank 3.");
-    static_assert(rank(SmemLayoutB{}) == 3, "Smem layout must be rank 3.");
+    static_assert(cute::rank(SmemLayoutA{}) == 3, "Smem layout must be rank 3.");
+    static_assert(cute::rank(SmemLayoutB{}) == 3, "Smem layout must be rank 3.");
 
     // Construct shared memory tiles
     SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
@@ -627,7 +629,6 @@ struct CollectiveMma<
       copy(smem_tiled_copy_B, tCsB_p(_,_,Int<0>{}), tCrB_copy_view(_,_,Int<0>{}));
     }
 
-
     CUTLASS_PRAGMA_NO_UNROLL
     for ( ; k_tile_count > -(DispatchPolicy::Stages-1); --k_tile_count)
     {
@@ -678,6 +679,7 @@ struct CollectiveMma<
       });
 
     }
+
   }
 };
 

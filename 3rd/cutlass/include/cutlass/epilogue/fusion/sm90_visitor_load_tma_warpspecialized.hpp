@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -85,16 +85,17 @@ using Sm90SplitTreeFetch = Sm90AccFetch;
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // returns C
+template <class Element>
 struct Sm90SrcFetch : Sm90VisitorImpl<> {
 
   CUTLASS_DEVICE bool
   is_producer_load_needed() const {
-    return true;
+    return is_C_load_needed();
   }
 
   CUTLASS_DEVICE bool
   is_C_load_needed() const {
-    return true;
+    return not is_void_v<Element>;
   }
 
   using Sm90VisitorImpl<>::Sm90VisitorImpl;
@@ -105,7 +106,6 @@ struct Sm90SrcFetch : Sm90VisitorImpl<> {
     ConsumerStoreCallbacks(SrcTensor const& tCrC)
       : tCrC(tCrC) {}
 
-    // make this a pointer if we need default ctor for generic tuple of visitors
     SrcTensor const& tCrC;                                                                         // (CPY,CPY_M,CPY_N)
 
     template <typename ElementAccumulator, int FragmentSize>
@@ -122,7 +122,7 @@ struct Sm90SrcFetch : Sm90VisitorImpl<> {
   >
   CUTLASS_DEVICE auto
   get_consumer_store_callbacks(ConsumerStoreArgs<Args...> const& args) {
-
+    // register type may differ from logical type so we can't assert matching types here
     return ConsumerStoreCallbacks(args.tCrC);
   }
 };
@@ -280,7 +280,8 @@ struct Sm90AuxLoad {
     Tensor bGS_gAux = thrblk_g2s.partition_S(gAux_epi);                                // (TMA,TMA_M,TMA_N,EPI_M,EPI_N)
     Tensor bGS_sAux = thrblk_g2s.partition_D(sAux_epi);                                // (TMA,TMA_M,TMA_N,PIPE)
 
-    return ProducerLoadCallbacks(cute::move(bGS_gAux), cute::move(bGS_sAux), params_ptr);
+    return ProducerLoadCallbacks<decltype(bGS_gAux), decltype(bGS_sAux)>(
+      cute::move(bGS_gAux), cute::move(bGS_sAux), params_ptr);
   }
 
   template <class RTensor, class TiledS2R, class STensorS2R>
@@ -343,8 +344,8 @@ struct Sm90AuxLoad {
                         make_tensor(make_smem_ptr(smem_aux), SmemLayout{}));            // (EPI_TILE_M,EPI_TILE_N,PIPE)
     auto tSR_sAux = tiled_s2r.get_slice(args.thread_idx).partition_S(sAux_epi);               // (S2R,S2R_M,S2R_N,PIPE)
 
-
-    return ConsumerStoreCallbacks(cute::move(tC_rAux), tiled_s2r, cute::move(tSR_sAux), params_ptr);
+    return ConsumerStoreCallbacks<decltype(tC_rAux), decltype(tiled_s2r), decltype(tSR_sAux)>(
+        cute::move(tC_rAux), tiled_s2r, cute::move(tSR_sAux), params_ptr);
   }
 };
 
@@ -641,8 +642,9 @@ struct Sm90RowBroadcast {
 
       if (epi_m == 0) { // Assumes M-major subtile loop
         // Filter so we don't issue redundant copies over stride-0 modes
+        // (only works if 0-strides are in same location, which is by construction)
         int bcast_pipe_index = (load_iteration / EpiTiles) % Stages;
-        copy(filter(tCsRow(_,_,_,epi_m,epi_n,bcast_pipe_index)), filter(tCrRow));
+        copy_aligned(filter(tCsRow(_,_,_,epi_m,epi_n,bcast_pipe_index)), filter(tCrRow));
       }
     }
 
@@ -774,7 +776,8 @@ struct Sm90ColBroadcast {
       }
 
       // Filter so we don't issue redundant copies over stride-0 modes
-      copy(filter(tCgCol), filter(tCrCol));
+      // (only works if 0-strides are in same location, which is by construction)
+      copy_aligned(filter(tCgCol), filter(tCrCol));
     }
 
     template <typename ElementAccumulator, int FragmentSize>
