@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,7 +30,7 @@
  **************************************************************************************************/
 #pragma once
 
-#if defined(__CUDA_ARCH__) || defined(_NVHPC_CUDA)
+#if defined(__CUDACC__) || defined(_NVHPC_CUDA)
 #  define CUTE_HOST_DEVICE __forceinline__ __host__ __device__
 #  define CUTE_DEVICE      __forceinline__          __device__
 #  define CUTE_HOST        __forceinline__ __host__
@@ -46,10 +46,11 @@
 #  define CUTE_HOST_RTC CUTE_HOST
 #endif
 
-#if !defined(__CUDACC_RTC__) && (defined(__CUDA_ARCH__) || defined(_NVHPC_CUDA))
+#if !defined(__CUDACC_RTC__) && !defined(__clang__) && \
+  (defined(__CUDA_ARCH__) || defined(_NVHPC_CUDA))
 #  define CUTE_UNROLL    #pragma unroll
 #  define CUTE_NO_UNROLL #pragma unroll 1
-#elif defined(__CUDACC_RTC__)
+#elif defined(__CUDACC_RTC__) || defined(__clang__)
 #  define CUTE_UNROLL    _Pragma("unroll")
 #  define CUTE_NO_UNROLL _Pragma("unroll 1")
 #else
@@ -118,6 +119,8 @@
 #else
 #include <cassert>
 #endif
+
+#define CUTE_STATIC_V(x)            decltype(x)::value
 
 #define CUTE_STATIC_ASSERT          static_assert
 #define CUTE_STATIC_ASSERT_V(x,...) static_assert(decltype(x)::value, ##__VA_ARGS__)

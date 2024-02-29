@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -170,7 +170,8 @@ public:
       [[maybe_unused]] TileCoordMNKL tile_coord_mnkl,
       [[maybe_unused]] TiledMma tiled_mma,
       [[maybe_unused]] int thread_idx,
-      [[maybe_unused]] TensorStorage& shared_tensors)
+      [[maybe_unused]] TensorStorage& shared_tensors,
+      [[maybe_unused]] int subtile_idx=-1)
   {
     return load_pipe_producer_state;
   }
@@ -202,14 +203,15 @@ public:
       cute::Tensor<AccEngine,AccLayout> accumulators,
       TiledMma tiled_mma,
       int thread_idx,
-      TensorStorage& shared_tensors)
+      TensorStorage& shared_tensors,
+      int subtile_index = -1)
   {
-    constexpr int BLK_M_RANK = rank<0>(tile_shape_MNK);
+    constexpr int BLK_M_RANK = cute::rank<0>(tile_shape_MNK);
     auto m_max_coord = unwrap(cute::transform(make_seq<BLK_M_RANK>{}, [&](auto i) {
         return get<0,i>(problem_shape_mnkl) - get<0,i>(tile_shape_MNK) * get<0,i>(tile_coord_mnkl);
       }));
 
-    constexpr int BLK_N_RANK = rank<1>(tile_shape_MNK);
+    constexpr int BLK_N_RANK = cute::rank<1>(tile_shape_MNK);
     auto n_max_coord = unwrap(cute::transform(make_seq<BLK_N_RANK>{}, [&](auto i) {
         return get<1,i>(problem_shape_mnkl) - get<1,i>(tile_shape_MNK) * get<1,i>(tile_coord_mnkl);
       }));

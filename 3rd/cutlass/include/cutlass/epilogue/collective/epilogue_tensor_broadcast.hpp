@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -69,7 +69,8 @@ template <
   class StrideC_,
   class StrideD_,
   class ThreadEpilogueOp_,
-  class EpilogueSchedule_
+  class EpilogueSchedule_,
+  bool PerColumnBias_ = false
 >
 class EpilogueTensorBroadcast {
 public:
@@ -91,8 +92,8 @@ public:
   using StrideD = StrideD_;
   using ActivationFunctor = typename ThreadEpilogueOp::ActivationFunctor;
 
-  static_assert(rank(StrideC{}) == 3, "StrideCD must be rank-3: [M, N, L]");
-  static_assert(rank(StrideD{}) == 3, "StrideCD must be rank-3: [M, N, L]");
+  static_assert(cute::rank(StrideC{}) == 3, "StrideCD must be rank-3: [M, N, L]");
+  static_assert(cute::rank(StrideD{}) == 3, "StrideCD must be rank-3: [M, N, L]");
 
   static constexpr int kOutputAlignment = ThreadEpilogueOp::kCount;
   using AlignmentType = typename cute::uint_bit<sizeof_bits<ElementOutput>::value * kOutputAlignment>::type;
@@ -100,6 +101,9 @@ public:
   static constexpr bool IsBinaryOp0Enabled = ThreadEpilogueOp::IsBinaryOp0Enabled;
   static constexpr bool IsBinaryOp1Enabled = ThreadEpilogueOp::IsBinaryOp1Enabled;
   static constexpr bool IsUnaryOpEnabled = ThreadEpilogueOp::IsUnaryOpEnabled;
+
+  static constexpr bool PerColumnBias = PerColumnBias_;
+  using BiasStride = typename cute::conditional_t<PerColumnBias, Stride<_0, _1, _0>, Stride<_1, _0, _0>>;
 
   struct SharedStorage { };
 
@@ -182,10 +186,10 @@ public:
     using namespace cute;
     using X = Underscore;
 
-    static_assert(rank(ProblemShapeMNKL{}) == 4, "ProblemShapeMNKL must be rank 4");
+    static_assert(cute::rank(ProblemShapeMNKL{}) == 4, "ProblemShapeMNKL must be rank 4");
     static_assert(is_static<BlockShapeMNK>::value, "ThreadBlock tile shape must be static");
-    static_assert(rank(BlockShapeMNK{}) == 3, "BlockShapeMNK must be rank 3");
-    static_assert(rank(BlockCoordMNKL{}) == 4, "BlockCoordMNKL must be rank 4");
+    static_assert(cute::rank(BlockShapeMNK{}) == 3, "BlockShapeMNK must be rank 3");
+    static_assert(cute::rank(BlockCoordMNKL{}) == 4, "BlockCoordMNKL must be rank 4");
 
     // Separate out problem shape for convenience
     auto M = get<0>(problem_shape_mnkl);
@@ -194,7 +198,7 @@ public:
 
     auto stride_c    = detail::get_epilogue_stride<EpilogueSchedule>(params.dC);
     auto stride_d    = detail::get_epilogue_stride<EpilogueSchedule>(params.dD);
-    auto stride_bias = detail::get_epilogue_stride<EpilogueSchedule>(Stride<_1, _0, _0>{});
+    auto stride_bias = detail::get_epilogue_stride<EpilogueSchedule>(BiasStride{});
 
     // Represent the full output tensor
     Tensor mC0_mnl = make_tensor(make_gmem_ptr(params.ptr_C0), make_shape(M,N,L), stride_c);                   // (m,n,l)

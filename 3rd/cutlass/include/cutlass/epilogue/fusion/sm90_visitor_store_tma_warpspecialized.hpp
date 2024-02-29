@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2023 - 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -68,6 +68,7 @@ template <
   bool EnableNullptr = true // Noop on nullptr params
 >
 struct Sm90AuxStore {
+  using ElementAux = Element;
   static_assert(Alignment * sizeof_bits_v<Element> % 128 == 0, "sub-16B alignment not supported yet");
 
   constexpr static bool is_m_major = epilogue::collective::detail::is_m_major<StrideMNL>();
@@ -268,7 +269,7 @@ struct Sm90AuxStore {
     Tensor bSG_sAux = thrblk_s2g.partition_S(sAux_epi);                                // (TMA,TMA_M,TMA_N,PIPE)
     Tensor bSG_gAux = thrblk_s2g.partition_D(gAux_epi);                                // (TMA,TMA_M,TMA_N,EPI_M,EPI_N)
 
-    return ConsumerStoreCallbacks(
+    return ConsumerStoreCallbacks<decltype(tC_rAux), decltype(tiled_r2s), decltype(tRS_sAux), decltype(bSG_sAux), decltype(bSG_gAux)>(
             cute::move(tC_rAux),
             tiled_r2s,
             cute::move(tRS_sAux),
@@ -303,7 +304,7 @@ private:
   static constexpr bool IsAtomic = is_atomic<GmemReduceFn<ElementCompute>>::value;
   static_assert(IsAtomic, "non-atomic scalar reduction not supported yet");
 
-public: 
+public:
   struct SharedStorage { };
 
   struct Arguments {
@@ -814,7 +815,7 @@ public:
       }
 
       auto& [ref_src, tCrCol, tCcCol, gCol_l, cCol, gBuf_nl, sBuf_layout,
-              lane_layout_MN, lane_mn, warp_layout_MN, warp_mn, 
+              lane_layout_MN, lane_mn, warp_layout_MN, warp_mn,
               tile_coord_mnkl, residue_mn, epi_tile, tiled_copy, thread_idx] = args_tuple;
       Tensor tCrCol_mn = tCrCol(_,_,_,epi_m,epi_n);
       Tensor tCcCol_mn = tCcCol(_,_,_,epi_m,epi_n);
@@ -843,8 +844,8 @@ public:
         return;
       }
 
-      auto& [ref_src, tCrCol, tCcCol, gCol_l, cCol, gBuf_nl, sBuf_layout, 
-              lane_layout_MN, lane_mn, warp_layout_MN, warp_mn, 
+      auto& [ref_src, tCrCol, tCcCol, gCol_l, cCol, gBuf_nl, sBuf_layout,
+              lane_layout_MN, lane_mn, warp_layout_MN, warp_mn,
               tile_coord_mnkl, residue_mn, epi_tile, tiled_copy, thread_idx] = args_tuple;
       auto [m, n, k, l] = tile_coord_mnkl;
       constexpr bool ReferenceSrc = decltype(ref_src)::value;
@@ -915,8 +916,9 @@ public:
         using ElementGmem = conditional_t<FinalReduction, ElementCompute volatile, ElementCompute>;
         Tensor tCgBuf = sm90_partition_for_epilogue<ReferenceSrc>(gBuf_nl(_,_,n,l), epi_tile, tiled_copy, thread_idx);
         if (is_reduced_lane) {
-          // Filter so we don't issue redunant copies over stride-0 modes
-          copy(filter(tCrCol), recast<ElementGmem>(filter(tCgBuf)));
+          // Filter so we don't issue redundant copies over stride-0 modes
+          // (only works if 0-strides are in same location, which is by construction)
+          copy_aligned(filter(tCrCol), recast<ElementGmem>(filter(tCgBuf)));
         }
         sync_fn();
       }
@@ -934,7 +936,8 @@ public:
         Tensor tCsBuf = sm90_partition_for_epilogue<ReferenceSrc>(sBuf(_,_,get<1>(warp_mn)), epi_tile, tiled_copy, thread_idx);
         if (is_reduced_lane) {
           // Filter so we don't issue redunant copies over stride-0 modes
-          copy(filter(tCrCol), filter(tCsBuf));
+          // (only works if 0-strides are in same location, which is by construction)
+          copy_aligned(filter(tCrCol), filter(tCsBuf));
         }
         sync_fn();
 
@@ -1000,15 +1003,15 @@ public:
           return;
         }
 
-        auto& [ref_src, tCrCol, tCcCol, gCol_l, cCol, gBuf_nl, sBuf_layout, 
-                lane_layout_MN, lane_mn, warp_layout_MN, warp_mn, 
+        auto& [ref_src, tCrCol, tCcCol, gCol_l, cCol, gBuf_nl, sBuf_layout,
+                lane_layout_MN, lane_mn, warp_layout_MN, warp_mn,
                 tile_coord_mnkl, residue_mn, epi_tile, tiled_copy, thread_idx] = args_tuple;
 
         using ReduceOutput = GmemReduceFn<ElementCompute>;
         using ConvertOutput = NumericConverter<ElementOutput, ElementCompute, RoundStyle>;
         ReduceOutput reduce_output{};
         ConvertOutput convert_output{};
-        
+
         // Reduction over batches
         if (size<2>(stride(gCol_l)) == 0) {
           CUTLASS_PRAGMA_NO_UNROLL
@@ -1049,8 +1052,8 @@ public:
 
     CUTLASS_DEVICE bool
     is_reduction_buffer_needed(int epi_m, int epi_n, bool is_last_iteration) const {
-      auto const& [ref_src, tCrCol, tCcCol, gCol_l, cCol, gBuf_nl, sBuf_layout, 
-                    lane_layout_MN, lane_mn, warp_layout_MN, warp_mn, 
+      auto const& [ref_src, tCrCol, tCcCol, gCol_l, cCol, gBuf_nl, sBuf_layout,
+                    lane_layout_MN, lane_mn, warp_layout_MN, warp_mn,
                     tile_coord_mnkl, residue_mn, epi_tile, tiled_copy, thread_idx] = args_tuple;
 
       return (not IsAtomic &&                                  // atomic reduction doesn't use smem
@@ -1107,12 +1110,11 @@ public:
     Tensor gBuf_nl = local_tile(mBuf, take<0,2>(args.tile_shape_mnk), make_coord(m,_,_));     // (CTA_M,CTA_N,REST_N,L)
     Layout sBuf_layout = blocked_product(gBuf_layout,make_layout(make_shape(_1{},_1{},size<1>(warp_layout_MN)))); // (CTA_M,CTA_N,WARPS_N)
 
-    return ConsumerStoreCallbacks(
-      make_tuple(bool_constant<ReferenceSrc>{}, cute::move(tCrCol), args.tCcD, gCol_l, args.cD, gBuf_nl, sBuf_layout,
-                  lane_layout_MN, lane_mn, warp_layout_MN, warp_mn, 
-                  args.tile_coord_mnkl, args.residue_mn, args.epi_tile, args.tiled_copy, args.thread_idx),
-      params
-    );
+    auto args_tuple = make_tuple(
+        bool_constant<ReferenceSrc>{}, cute::move(tCrCol), args.tCcD, gCol_l, args.cD, gBuf_nl, sBuf_layout,
+        lane_layout_MN, lane_mn, warp_layout_MN, warp_mn,
+        args.tile_coord_mnkl, args.residue_mn, args.epi_tile, args.tiled_copy, args.thread_idx);
+    return ConsumerStoreCallbacks<decltype(args_tuple)>(std::move(args_tuple), params);
   }
 };
 
