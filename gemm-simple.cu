@@ -144,7 +144,7 @@ int main() {
   }
 
   Tensor tensor_C = make_tensor(Cptr_host, make_shape(m, n), make_stride(n, 1));
-  Tensor tensor_C_cublas = make_tensor(Cptr_host, make_shape(m, n), make_stride(n, 1));
+  Tensor tensor_C_cublas = make_tensor(Cptr_cublas_host, make_shape(m, n), make_stride(n, 1));
 
   auto tile = make_tile(8, 8);
   auto coor = make_coord(0, 0);
